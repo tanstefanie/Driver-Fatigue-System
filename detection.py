@@ -6,7 +6,7 @@ import numpy as np
 from pygame import mixer
 import time
 
-from head_tilt import get_head_tilt_angle
+from head_tilt import get_head_tilt_angle_vertical
 
 # Initialize mixer for alarm
 mixer.init()
@@ -50,7 +50,7 @@ while True:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Get head tilt angle
-    angle = get_head_tilt_angle(gray)
+    angle = get_head_tilt_angle_vertical(gray)
     if (angle is not None) and (angle > tilt_angle_treshold):
         if tilt_start_time is None:
             tilt_start_time = time.time()
@@ -63,7 +63,14 @@ while True:
     left_eye = leye.detectMultiScale(gray)
     right_eye = reye.detectMultiScale(gray)
 
-    cv2.rectangle(frame, (0, height - 50), (200, height), (0, 0, 0), thickness=cv2.FILLED)
+    # Create a black rectangle to display status text
+    cv2.rectangle(frame, (0, height - 100), (400, height), (0, 0, 0), thickness=cv2.FILLED)
+
+    # Display thresholds on the top-left corner
+    cv2.putText(frame, f"Head Tilt Threshold: {tilt_angle_treshold} Degrees", 
+                (10, 30), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Eyes Open Threshold: 15 frames", 
+                (10, 60), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
     for (x, y, w, h) in faces:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
@@ -80,7 +87,7 @@ while True:
         # Make prediction
         rpred = model.predict(r_eye)  # Output is (1, 1)
         prob_open = rpred[0][0]  # Extract the single probability
-        prob_closed = 1 - prob_open  # Compute the complementary probability
+        # prob_closed = 1 - prob_open  # Compute the complementary probability
 
         # Determine the label
         if prob_open > 0.5:
@@ -104,7 +111,7 @@ while True:
         # Make prediction
         lpred = model.predict(l_eye)  # Output is (1, 1)
         prob_open = lpred[0][0]  # Extract the single probability
-        prob_closed = 1 - prob_open  # Compute the complementary probability
+        # prob_closed = 1 - prob_open  # Compute the complementary probability
 
         # Determine the label
         if prob_open > 0.5:
@@ -118,18 +125,26 @@ while True:
 
     if val1 == 0 and val2 == 0:
         score += 1
-        cv2.putText(frame, "Closed", (10, height - 20), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
     else:
         score -= 1
-        cv2.putText(frame, "Open", (10, height - 20), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
     if score < 0:
         score = 0
-    cv2.putText(frame, 'Alarm count:' + str(score), (100, height - 20), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Display status text
+    cv2.putText(frame, f"Eyes: {'Closed' if val1 == 0 and val2 == 0 else 'Open'}", 
+                (10, height - 70), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+
+    if angle is not None and angle > tilt_angle_treshold:
+        cv2.putText(frame, f"Head Tilt: {angle:.1f} degrees", 
+                    (10, height - 40), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+
+    cv2.putText(frame, f"Eyes closed count: {score}", 
+                (10, height - 10), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
     if score > 15:
         # Person is feeling sleepy, trigger alarm
-        cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
+        # cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
         try:
             sound.play()
         except:
