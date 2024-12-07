@@ -6,6 +6,8 @@ import numpy as np
 from pygame import mixer
 import time
 
+from head_tilt import get_head_tilt_angle
+
 # Initialize mixer for alarm
 mixer.init()
 sound = mixer.Sound('alarm.wav')
@@ -15,13 +17,18 @@ face = cv2.CascadeClassifier('haar cascade files/haarcascade_frontalface_alt.xml
 leye = cv2.CascadeClassifier('haar cascade files/haarcascade_lefteye_2splits.xml')
 reye = cv2.CascadeClassifier('haar cascade files/haarcascade_righteye_2splits.xml')
 
+# Add head tilt detection
+tilt_start_time = None
+tilt_angle_treshold = 15
+tilt_duration_limit = 3000 # 3 seconds max of head tilt that exceeds 15 degrees angle treshold
+
 lbl = ['Close', 'Open']
 
 # Load the trained model
 model = load_model('./content/model-after-augm.h5')
 
 # Start video capture
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 font = cv2.FONT_HERSHEY_COMPLEX_SMALL
 
 # Initialize variables
@@ -41,6 +48,16 @@ while True:
 
     height, width = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Get head tilt angle
+    angle = get_head_tilt_angle(gray)
+    if (angle is not None) and (angle > tilt_angle_treshold):
+        if tilt_start_time is None:
+            tilt_start_time = time.time()
+        elif time.time() - tilt_start_time > tilt_duration_limit:
+            sound.play()
+    else:
+        tilt_start_time = None
 
     faces = face.detectMultiScale(gray, minNeighbors=5, scaleFactor=1.1, minSize=(25, 25))
     left_eye = leye.detectMultiScale(gray)
