@@ -6,7 +6,7 @@ import numpy as np
 from pygame import mixer
 import time
 
-from head_tilt import get_head_tilt_angle_vertical
+from head_tilt import get_head_tilt
 
 # Initialize mixer for alarm
 mixer.init()
@@ -16,13 +16,13 @@ sound = mixer.Sound('alarm.wav')
 face = cv2.CascadeClassifier('haar cascade files/haarcascade_frontalface_alt.xml')
 leye = cv2.CascadeClassifier('haar cascade files/haarcascade_lefteye_2splits.xml')
 reye = cv2.CascadeClassifier('haar cascade files/haarcascade_righteye_2splits.xml')
+nose = cv2.CascadeClassifier('haar cascade files/haarcascade_mcs_nose.xml')
 
-# Add head tilt detection
-tilt_start_time = None
-tilt_angle_treshold = 15
-tilt_duration_limit = 3000 # 3 seconds max of head tilt that exceeds 15 degrees angle treshold
-
-lbl = ['Close', 'Open']
+# Thresholds
+previous_nose_y = None
+nose_disappear_count = 0
+nose_disappear_threshold = 5  # Frames to wait before considering "head down"
+y_diff_threshold = 50  # Change in y-coordinate for "head down"
 
 # Load the trained model
 model = load_model('./content/model-after-augm.h5')
@@ -32,6 +32,7 @@ cap = cv2.VideoCapture(0)
 font = cv2.FONT_HERSHEY_COMPLEX_SMALL
 
 # Initialize variables
+lbl = ['Close', 'Open']
 count = 0
 score = 0
 thicc = 2
@@ -39,6 +40,9 @@ rpred = [1, 0]
 lpred = [1, 0]
 val1 = 1
 val2 = 1
+tilt_score = 0
+tilt_increment_delay = 2  # Number of consecutive frames to wait before incrementing
+tilt_increment_count = 0  # Counter for consecutive frames of head tilt
 
 while True:
     ret, frame = cap.read()
@@ -46,35 +50,32 @@ while True:
         print("Failed to grab frame.")
         break
 
+    # Step 1: Instantiate variables and get grayscale frame
     height, width = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Get head tilt angle
-    angle = get_head_tilt_angle_vertical(gray)
-    if (angle is not None) and (angle > tilt_angle_treshold):
-        if tilt_start_time is None:
-            tilt_start_time = time.time()
-        elif time.time() - tilt_start_time > tilt_duration_limit:
-            sound.play()
-    else:
-        tilt_start_time = None
+    # Define positions for text display
+    threshold_y = 30  # Top-left corner for thresholds
+    value_y = height - 100  # Bottom-left corner for actual values
+    line_spacing = 30  # Spacing between lines
 
+    # Step 2: Get face and eye bounding boxes
     faces = face.detectMultiScale(gray, minNeighbors=5, scaleFactor=1.1, minSize=(25, 25))
     left_eye = leye.detectMultiScale(gray)
     right_eye = reye.detectMultiScale(gray)
 
-    # Create a black rectangle to display status text
-    cv2.rectangle(frame, (0, height - 100), (400, height), (0, 0, 0), thickness=cv2.FILLED)
+    # Display thresholds in the top-left corner
+    cv2.putText(frame, f"Head Tilt Threshold: {y_diff_threshold}", 
+                (10, threshold_y), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
 
-    # Display thresholds on the top-left corner
-    cv2.putText(frame, f"Head Tilt Threshold: {tilt_angle_treshold} Degrees", 
-                (10, 30), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Eyes Open Threshold: 15 frames", 
-                (10, 60), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Eyes Open Threshold: 30 frames", 
+                (10, threshold_y + line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
+    # Bounding Box for Whole face
     for (x, y, w, h) in faces:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
 
+    # Step 3: Get eye open/close state
     for (x, y, w, h) in right_eye:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
         r_eye = gray[y:y + h, x:x + w]
@@ -122,31 +123,56 @@ while True:
             lbl = 'Closed'
         break
 
+    # Step 4: Get nose tilt y-displacement
+    nose_y = get_head_tilt(gray, face, nose)
 
+    # Step 5: Update scores
     if val1 == 0 and val2 == 0:
-        score += 1
+        score += 1  # Increment when eyes are closed
     else:
-        score -= 1
+        score = max(0, score - 1)  # Decrement score but keep it non-negative
 
-    if score < 0:
-        score = 0
+    if nose_y is None:
+        nose_disappear_count += 1
+        if nose_disappear_count > nose_disappear_threshold:
+            tilt_increment_count += 1
+            if tilt_increment_count > tilt_increment_delay:
+                print("Head down: Sustained nose disappearance")
+                tilt_score += 1
+                tilt_increment_count = 0  # Reset the delay counter
+    else:
+        if previous_nose_y is not None:
+            y_diff = nose_y - previous_nose_y
+            if y_diff > y_diff_threshold:
+                tilt_increment_count += 1
+                if tilt_increment_count > tilt_increment_delay:
+                    print(f"Head down: Sustained nose movement, y_diff = {y_diff}")
+                    tilt_score += 1
+                    tilt_increment_count = 0  # Reset the delay counter
+            else:
+                tilt_score = max(0, tilt_score - 1)
+                tilt_increment_count = 0  # Reset delay if condition is not met
+        nose_disappear_count = 0  # Reset disappear count
+        previous_nose_y = nose_y
 
-    # Display status text
+    # Step 6: Display scores
     cv2.putText(frame, f"Eyes: {'Closed' if val1 == 0 and val2 == 0 else 'Open'}", 
-                (10, height - 70), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+                (10, value_y), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
-    if angle is not None and angle > tilt_angle_treshold:
-        cv2.putText(frame, f"Head Tilt: {angle:.1f} degrees", 
-                    (10, height - 40), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Tilt Score: {tilt_score}", 
+                (10, value_y + line_spacing), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
 
-    cv2.putText(frame, f"Eyes closed count: {score}", 
-                (10, height - 10), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Eyes Closed Count: {score}", 
+                (10, value_y + 2 * line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
+
+    # Step 7: Score conditions to trigger alarms
     if score > 15:
         # Person is feeling sleepy, trigger alarm
         # cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
         try:
             sound.play()
+            print("Eye alarm playing")
         except:
             pass
         if thicc < 16:
@@ -157,6 +183,14 @@ while True:
                 thicc = 2
         cv2.rectangle(frame, (0, 0), (width, height), (0, 0, 255), thicc)
 
+    if tilt_score > 15:
+        try:
+            sound.play()
+            print("Tilt alarm playing")
+        except:
+            pass
+
+    # Display frame
     cv2.imshow('frame', frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break

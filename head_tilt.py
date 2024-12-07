@@ -1,26 +1,36 @@
 import math
-import dlib
+# import dlib
 
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor('dlib files/shape_predictor_68_face_landmarks.dat')  # Pre-trained landmarks model
+# detector = dlib.get_frontal_face_detector()
+# predictor = dlib.shape_predictor('dlib files/shape_predictor_68_face_landmarks.dat')  # Pre-trained landmarks model
 
-def get_head_tilt_angle_vertical(gray_frame):
-    faces = detector(gray_frame)
+def get_head_tilt(gray_frame, face_cascade, nose_cascade):
+    """
+    Calculate head tilt based on the y-coordinate of the nose tip.
 
-    if (len(faces)) == 0:
-        return None # no face detected
-    
-    for face in faces:
-        landmarks = predictor(gray_frame, face)
+    Args:
+        gray_frame: Grayscale frame of the video feed.
+        face_cascade: Haar cascade for face detection.
+        nose_cascade: Haar cascade for nose detection.
 
-        # get the coordinates for key points: nose tip and chin
-        nose_tip = (landmarks.part(30).x, landmarks.part(30).y) 
-        chin = (landmarks.part(8).x, landmarks.part(8).y)
+    Returns:
+        y-coordinate of the nose tip, or None if not detected.
+    """
+    faces = face_cascade.detectMultiScale(gray_frame, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
+    if len(faces) == 0:
+        return None  # No face detected
 
-        # Compute vertical tilt angle with key points
-        delta_y = chin[1] - nose_tip[1] # vertical distance
-        delta_x = chin[0] - nose_tip[0] # horizontal distance
-        angle = math.degrees(math.atan2(delta_y, delta_x))
+    for (x, y, w, h) in faces:
+        # Focus on the face area
+        face_roi = gray_frame[y:y + h, x:x + w]
+        noses = nose_cascade.detectMultiScale(face_roi, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
-        # Return absolute angle 
-        return abs(angle)
+        if len(noses) == 0:
+            return None  # No nose detected
+
+        for (nx, ny, nw, nh) in noses:
+            # Calculate the absolute y-coordinate of the nose tip
+            nose_tip_y = y + ny + nh // 2
+            return nose_tip_y
+
+    return None
