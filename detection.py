@@ -25,11 +25,17 @@ nose_disappear_threshold = 5  # Frames to wait before considering "head down"
 y_diff_threshold = 50  # Change in y-coordinate for "head down"
 
 # Load the trained model
-model = load_model('./content/model-after-augm.h5')
+model = load_model('./content/model-after-augmv2.h5')
 
 # Start video capture
 cap = cv2.VideoCapture(0)
 font = cv2.FONT_HERSHEY_COMPLEX_SMALL
+
+# Set desired FPS and resolution
+desired_fps = 60
+cap.set(cv2.CAP_PROP_FPS, desired_fps)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # Reduce width for higher FPS
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # Reduce height for higher FPS
 
 # Initialize variables
 lbl = ['Close', 'Open']
@@ -41,7 +47,7 @@ lpred = [1, 0]
 val1 = 1
 val2 = 1
 tilt_score = 0
-tilt_increment_delay = 2  # Number of consecutive frames to wait before incrementing
+tilt_increment_delay = 1  # Number of consecutive frames to wait before incrementing
 tilt_increment_count = 0  # Counter for consecutive frames of head tilt
 
 while True:
@@ -167,7 +173,7 @@ while True:
 
 
     # Step 7: Score conditions to trigger alarms
-    if score > 15:
+    if score > 15 or tilt_score > 8:
         # Person is feeling sleepy, trigger alarm
         # cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
         try:
@@ -183,12 +189,12 @@ while True:
                 thicc = 2
         cv2.rectangle(frame, (0, 0), (width, height), (0, 0, 255), thicc)
 
-    if tilt_score > 15:
-        try:
-            sound.play()
-            print("Tilt alarm playing")
-        except:
-            pass
+    # if tilt_score >10:
+    #     try:
+    #         sound.play()
+    #         print("Tilt alarm playing")
+    #     except:
+    #         pass
 
     # Display frame
     cv2.imshow('frame', frame)
