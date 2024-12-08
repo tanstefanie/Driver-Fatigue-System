@@ -5,8 +5,10 @@ from keras.models import load_model
 import numpy as np
 from pygame import mixer
 import time
+import dlib
 
 from head_tilt import get_head_tilt
+from yawn import detect_yawn
 
 # Initialize mixer for alarm
 mixer.init()
@@ -18,14 +20,20 @@ leye = cv2.CascadeClassifier('haar cascade files/haarcascade_lefteye_2splits.xml
 reye = cv2.CascadeClassifier('haar cascade files/haarcascade_righteye_2splits.xml')
 nose = cv2.CascadeClassifier('haar cascade files/haarcascade_mcs_nose.xml')
 
+# Load Dlib 
+face_detector = dlib.get_frontal_face_detector()
+landmark_predictor = dlib.shape_predictor("dlib files/shape_predictor_68_face_landmarks.dat")
+
 # Thresholds
 previous_nose_y = None
 nose_disappear_count = 0
 nose_disappear_threshold = 5  # Frames to wait before considering "head down"
 y_diff_threshold = 50  # Change in y-coordinate for "head down"
 
+yawn_threshold = 8  # Frames of sustained yawning before alarm
+
 # Load the trained model
-model = load_model('./content/model-after-augmv2.h5')
+model = load_model('./content/model-after-augm.h5')
 
 # Start video capture
 cap = cv2.VideoCapture(0)
@@ -49,6 +57,7 @@ val2 = 1
 tilt_score = 0
 tilt_increment_delay = 1  # Number of consecutive frames to wait before incrementing
 tilt_increment_count = 0  # Counter for consecutive frames of head tilt
+yawn_score = 0  # Score for sustained yawning
 
 while True:
     ret, frame = cap.read()
@@ -81,7 +90,7 @@ while True:
     for (x, y, w, h) in faces:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
 
-    # Step 3: Get eye open/close state
+    # Step 3.1: Get eye open/close state
     for (x, y, w, h) in right_eye:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
         r_eye = gray[y:y + h, x:x + w]
@@ -129,15 +138,20 @@ while True:
             lbl = 'Closed'
         break
 
-    # Step 4: Get nose tilt y-displacement
+    # Step 3.2: Get nose tilt y-displacement
     nose_y = get_head_tilt(gray, face, nose)
 
-    # Step 5: Update scores
+    # Step 3.3 : Detect yawns
+    yawning, mar_value = detect_yawn(frame)
+
+    # Step 4: Update scores
+    # Update Eye Score
     if val1 == 0 and val2 == 0:
         score += 1  # Increment when eyes are closed
     else:
         score = max(0, score - 1)  # Decrement score but keep it non-negative
 
+    # Update Head Tilt Score
     if nose_y is None:
         nose_disappear_count += 1
         if nose_disappear_count > nose_disappear_threshold:
@@ -160,20 +174,30 @@ while True:
                 tilt_increment_count = 0  # Reset delay if condition is not met
         nose_disappear_count = 0  # Reset disappear count
         previous_nose_y = nose_y
+    
+    # Update Yawn Score
+    if yawning:
+        yawn_score += 1
+    else:
+        yawn_score = max(0, yawn_score - 1)
 
-    # Step 6: Display scores
+    # Step 5: Display scores
     cv2.putText(frame, f"Eyes: {'Closed' if val1 == 0 and val2 == 0 else 'Open'}", 
                 (10, value_y), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, f"Eyes Score: {score}", 
+                (10, value_y + line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
     cv2.putText(frame, f"Tilt Score: {tilt_score}", 
-                (10, value_y + line_spacing), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+                (10, value_y + 2 * line_spacing), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, f"Yawn Score: {yawn_score}", 
+                (10, value_y + 3 * line_spacing), font, 1, (144,238,144), 1, cv2.LINE_AA)
 
-    cv2.putText(frame, f"Eyes Closed Count: {score}", 
-                (10, value_y + 2 * line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
 
-    # Step 7: Score conditions to trigger alarms
-    if score > 15 or tilt_score > 8:
+    # Step 6: Score conditions to trigger alarms
+    if score > 15 or tilt_score > 8 or yawn_score > yawn_threshold:
         # Person is feeling sleepy, trigger alarm
         # cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
         try:
@@ -188,13 +212,6 @@ while True:
             if thicc < 2:
                 thicc = 2
         cv2.rectangle(frame, (0, 0), (width, height), (0, 0, 255), thicc)
-
-    # if tilt_score >10:
-    #     try:
-    #         sound.play()
-    #         print("Tilt alarm playing")
-    #     except:
-    #         pass
 
     # Display frame
     cv2.imshow('frame', frame)
