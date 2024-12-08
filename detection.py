@@ -45,8 +45,9 @@ increment_value = 3.0
 
 # Time-based thresholds in seconds
 eye_closed_threshold = 1.5  # 2 seconds of sustained eye closure
-head_tilt_threshold = 2.5  # 1.5 seconds of sustained head tilt
-yawn_threshold_time = 4.0  # 3 seconds of sustained yawning
+head_tilt_threshold = 1.0  # 1.5 seconds of sustained head tilt
+yawn_threshold_time = 2.0  # 3 seconds of sustained yawning
+face_reset_threshold = 3.0  # Reset scores if no face detected for 5 seconds
 
 # Dynamically calculate the actual FPS
 actual_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -59,14 +60,17 @@ eye_closed_threshold_frames = int(eye_closed_threshold * actual_fps)
 head_tilt_threshold_frames = int(head_tilt_threshold * actual_fps)
 yawn_threshold_frames = int(yawn_threshold_time * actual_fps)
 
-# Initialize scoring variables
+# Initialise scoring variables
 eye_closed_score = 0
 head_tilt_score = 0
 yawn_score = 0
 
-# Initialize nose tracking variables
+# Initialise nose tracking variables
 previous_nose_y = None
 y_diff_threshold = 50  # Change in y-coordinate for "head down"
+
+# Initialise last face detected time stamp
+last_face_detected_time = time.time()
 
 while True:
     ret, frame = cap.read()
@@ -87,6 +91,22 @@ while True:
     faces = face.detectMultiScale(gray, minNeighbors=5, scaleFactor=1.1, minSize=(25, 25))
     left_eye = leye.detectMultiScale(gray)
     right_eye = reye.detectMultiScale(gray)
+
+    # Reset the 3 frame values if no face detected for 5s
+    if len(faces) > 0:
+        # Face detected, update the timer
+        last_face_detected_time = time.time()
+        print(f"last face time : {last_face_detected_time}")
+        for (x, y, w, h) in faces:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
+    else:
+        # No face detected, check elapsed time
+        time_since_last_face = time.time() - last_face_detected_time
+        if time_since_last_face >= face_reset_threshold:
+            print(f"No face detected for {face_reset_threshold} seconds. Resetting scores.")
+            eye_closed_score = 0
+            head_tilt_score = 0
+            yawn_score = 0
 
     # Bounding Box for Whole face
     for (x, y, w, h) in faces:
@@ -147,7 +167,7 @@ while True:
     # Step 4: Update scores
     # Update Eye Score
     if val1 == 0 and val2 == 0:  # Eyes are closed
-        eye_closed_score += increment_value
+        eye_closed_score += increment_value + 1.0
     else:  # Eyes are open
         eye_closed_score = max(0, eye_closed_score - increment_value)  # Decrease score but keep it non-negative
 
@@ -160,7 +180,7 @@ while True:
     
     # Update Yawn Score
     if yawning:
-        yawn_score += increment_value
+        yawn_score += increment_value + 1.5
     else:
         yawn_score = max(0, yawn_score - increment_value)
 
