@@ -5,10 +5,9 @@ from keras.models import load_model
 import numpy as np
 from pygame import mixer
 import time
-import dlib
 
 from head_tilt import get_head_tilt
-from yawn import detect_yawn
+from yawn import get_yawn
 
 # Initialize mixer for alarm
 mixer.init()
@@ -19,18 +18,6 @@ face = cv2.CascadeClassifier('haar cascade files/haarcascade_frontalface_alt.xml
 leye = cv2.CascadeClassifier('haar cascade files/haarcascade_lefteye_2splits.xml')
 reye = cv2.CascadeClassifier('haar cascade files/haarcascade_righteye_2splits.xml')
 nose = cv2.CascadeClassifier('haar cascade files/haarcascade_mcs_nose.xml')
-
-# Load Dlib 
-face_detector = dlib.get_frontal_face_detector()
-landmark_predictor = dlib.shape_predictor("dlib files/shape_predictor_68_face_landmarks.dat")
-
-# Thresholds
-previous_nose_y = None
-nose_disappear_count = 0
-nose_disappear_threshold = 5  # Frames to wait before considering "head down"
-y_diff_threshold = 50  # Change in y-coordinate for "head down"
-
-yawn_threshold = 8  # Frames of sustained yawning before alarm
 
 # Load the trained model
 model = load_model('./content/model-after-augm.h5')
@@ -54,10 +41,32 @@ rpred = [1, 0]
 lpred = [1, 0]
 val1 = 1
 val2 = 1
-tilt_score = 0
-tilt_increment_delay = 1  # Number of consecutive frames to wait before incrementing
-tilt_increment_count = 0  # Counter for consecutive frames of head tilt
-yawn_score = 0  # Score for sustained yawning
+increment_value = 3.0
+
+# Time-based thresholds in seconds
+eye_closed_threshold = 1.5  # 2 seconds of sustained eye closure
+head_tilt_threshold = 2.5  # 1.5 seconds of sustained head tilt
+yawn_threshold_time = 4.0  # 3 seconds of sustained yawning
+
+# Dynamically calculate the actual FPS
+actual_fps = cap.get(cv2.CAP_PROP_FPS)
+if actual_fps <= 0:  # Fallback for systems that don't return FPS
+    actual_fps = 30  # Assume 30 FPS if actual FPS can't be determined
+print(f"Actual FPS: {actual_fps}")
+
+# Convert thresholds to frame-based values
+eye_closed_threshold_frames = int(eye_closed_threshold * actual_fps)
+head_tilt_threshold_frames = int(head_tilt_threshold * actual_fps)
+yawn_threshold_frames = int(yawn_threshold_time * actual_fps)
+
+# Initialize scoring variables
+eye_closed_score = 0
+head_tilt_score = 0
+yawn_score = 0
+
+# Initialize nose tracking variables
+previous_nose_y = None
+y_diff_threshold = 50  # Change in y-coordinate for "head down"
 
 while True:
     ret, frame = cap.read()
@@ -79,13 +88,6 @@ while True:
     left_eye = leye.detectMultiScale(gray)
     right_eye = reye.detectMultiScale(gray)
 
-    # Display thresholds in the top-left corner
-    cv2.putText(frame, f"Head Tilt Threshold: {y_diff_threshold}", 
-                (10, threshold_y), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
-
-    cv2.putText(frame, f"Eyes Open Threshold: 30 frames", 
-                (10, threshold_y + line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
-
     # Bounding Box for Whole face
     for (x, y, w, h) in faces:
         cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
@@ -103,7 +105,6 @@ while True:
         # Make prediction
         rpred = model.predict(r_eye)  # Output is (1, 1)
         prob_open = rpred[0][0]  # Extract the single probability
-        # prob_closed = 1 - prob_open  # Compute the complementary probability
 
         # Determine the label
         if prob_open > 0.5:
@@ -127,7 +128,6 @@ while True:
         # Make prediction
         lpred = model.predict(l_eye)  # Output is (1, 1)
         prob_open = lpred[0][0]  # Extract the single probability
-        # prob_closed = 1 - prob_open  # Compute the complementary probability
 
         # Determine the label
         if prob_open > 0.5:
@@ -142,67 +142,60 @@ while True:
     nose_y = get_head_tilt(gray, face, nose)
 
     # Step 3.3 : Detect yawns
-    yawning, mar_value = detect_yawn(frame)
+    yawning, mar_value = get_yawn(frame)
 
     # Step 4: Update scores
     # Update Eye Score
-    if val1 == 0 and val2 == 0:
-        score += 1  # Increment when eyes are closed
-    else:
-        score = max(0, score - 1)  # Decrement score but keep it non-negative
+    if val1 == 0 and val2 == 0:  # Eyes are closed
+        eye_closed_score += increment_value
+    else:  # Eyes are open
+        eye_closed_score = max(0, eye_closed_score - increment_value)  # Decrease score but keep it non-negative
 
     # Update Head Tilt Score
-    if nose_y is None:
-        nose_disappear_count += 1
-        if nose_disappear_count > nose_disappear_threshold:
-            tilt_increment_count += 1
-            if tilt_increment_count > tilt_increment_delay:
-                print("Head down: Sustained nose disappearance")
-                tilt_score += 1
-                tilt_increment_count = 0  # Reset the delay counter
+    if nose_y is None or (previous_nose_y is not None and abs(nose_y - previous_nose_y) > y_diff_threshold):
+        head_tilt_score += increment_value
     else:
-        if previous_nose_y is not None:
-            y_diff = nose_y - previous_nose_y
-            if y_diff > y_diff_threshold:
-                tilt_increment_count += 1
-                if tilt_increment_count > tilt_increment_delay:
-                    print(f"Head down: Sustained nose movement, y_diff = {y_diff}")
-                    tilt_score += 1
-                    tilt_increment_count = 0  # Reset the delay counter
-            else:
-                tilt_score = max(0, tilt_score - 1)
-                tilt_increment_count = 0  # Reset delay if condition is not met
-        nose_disappear_count = 0  # Reset disappear count
-        previous_nose_y = nose_y
+        head_tilt_score = max(0, head_tilt_score - increment_value)
+    previous_nose_y = nose_y
     
     # Update Yawn Score
     if yawning:
-        yawn_score += 1
+        yawn_score += increment_value
     else:
-        yawn_score = max(0, yawn_score - 1)
+        yawn_score = max(0, yawn_score - increment_value)
+
+    # Step 4 : Display thresholds in the top-left corner
+    cv2.putText(frame, f"Eyes Closed Threshold: {eye_closed_threshold:.1f}s",
+                (10, threshold_y), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, f"Head Tilt Threshold: {head_tilt_threshold:.1f}s",
+                (10, threshold_y + line_spacing), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, f"Yawning Threshold: {yawn_threshold_time:.1f}s",
+                (10, threshold_y + 2 * line_spacing), font, 1, (144, 238, 144), 1, cv2.LINE_AA)
 
     # Step 5: Display scores
     cv2.putText(frame, f"Eyes: {'Closed' if val1 == 0 and val2 == 0 else 'Open'}", 
                 (10, value_y), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
-    
-    cv2.putText(frame, f"Eyes Score: {score}", 
-                (10, value_y + line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
 
-    cv2.putText(frame, f"Tilt Score: {tilt_score}", 
+    cv2.putText(frame, f"Eyes Closed: {eye_closed_score / actual_fps:.1f}s", 
+                (10, value_y + line_spacing), font, 1, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, f"Head Tilt: {head_tilt_score / actual_fps:.1f}s", 
                 (10, value_y + 2 * line_spacing), font, 1, (0, 255, 255), 1, cv2.LINE_AA)
     
-    cv2.putText(frame, f"Yawn Score: {yawn_score}", 
-                (10, value_y + 3 * line_spacing), font, 1, (144,238,144), 1, cv2.LINE_AA)
-
-
+    cv2.putText(frame, f"Yawning: {yawn_score / actual_fps:.1f}s", 
+                (10, value_y + 3 * line_spacing), font, 1, (144, 238, 144), 1, cv2.LINE_AA)
 
     # Step 6: Score conditions to trigger alarms
-    if score > 15 or tilt_score > 8 or yawn_score > yawn_threshold:
+    if (eye_closed_score >= eye_closed_threshold_frames or
+        head_tilt_score >= head_tilt_threshold_frames or
+        yawn_score >= yawn_threshold_frames):
         # Person is feeling sleepy, trigger alarm
         # cv2.imwrite(os.path.join(os.getcwd(), 'image.jpg'), frame)
         try:
             sound.play()
-            print("Eye alarm playing")
+            print("Alarm playing")
         except:
             pass
         if thicc < 16:

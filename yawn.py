@@ -31,7 +31,7 @@ def calculate_mar(mouth_landmarks):
     return mar
 
 # Function to detect yawns using Mediapipe
-def detect_yawn(frame, mar_threshold=0.7):
+def get_yawn(frame, mar_threshold=0.7):
     yawning = False
     mar_value = 0
 
