@@ -159,7 +159,7 @@ while True:
         break
 
     # Step 3.2: Get nose tilt y-displacement
-    nose_y = get_head_tilt(gray, face, nose)
+    nose_detected, nose_y = get_head_tilt(frame, gray, face, nose)
 
     # Step 3.3 : Detect yawns
     yawning, mar_value = get_yawn(frame)
@@ -172,7 +172,7 @@ while True:
         eye_closed_score = max(0, eye_closed_score - increment_value)  # Decrease score but keep it non-negative
 
     # Update Head Tilt Score
-    if nose_y is None or (previous_nose_y is not None and abs(nose_y - previous_nose_y) > y_diff_threshold):
+    if not nose_detected or (previous_nose_y is not None and abs(nose_y - previous_nose_y) > y_diff_threshold):
         head_tilt_score += increment_value
     else:
         head_tilt_score = max(0, head_tilt_score - increment_value)
